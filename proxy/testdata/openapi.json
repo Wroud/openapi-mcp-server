@@ -1,0 +1,13 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Example API",
+    "version": "1.2.3",
+    "description": "Read public items from an example catalog."
+  },
+  "paths": {
+    "/items": {
+      "$ref": "https://unavailable.example/openapi.json#/paths/~1items"
+    }
+  }
+}
