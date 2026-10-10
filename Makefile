@@ -1,4 +1,4 @@
-.PHONY: test lint build build-local build-lambda run
+.PHONY: test lint build build-local build-lambda run dev smoke schema-check
 
 test:
 	go test -race ./...
@@ -19,3 +19,12 @@ build-local:
 
 run:
 	go run ./cmd/openapi-mcp-server
+
+dev:
+	./scripts/dev.sh run
+
+smoke:
+	./scripts/dev.sh smoke
+
+schema-check:
+	./scripts/dev.sh schema

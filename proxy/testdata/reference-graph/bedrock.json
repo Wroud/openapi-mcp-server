@@ -1,0 +1,66 @@
+{
+  "openapi": "3.1.0",
+  "servers": [
+    {
+      "url": "/api/bedrock-support"
+    }
+  ],
+  "info": {
+    "title": "Bedrock crossplay compatibility",
+    "description": "Check which Minecraft Java versions can accept Bedrock players with compatible server software.",
+    "version": "1.0.0"
+  },
+  "components": {
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/range": {
+      "get": {
+        "operationId": "getBedrockRange",
+        "security": [],
+        "tags": [
+          "bedrock-support"
+        ],
+        "summary": "Check Minecraft version compatibility for Bedrock crossplay",
+        "description": "Returns Minecraft Java version ranges that support Bedrock players for Fabric, NeoForge and Spigot-compatible servers. An empty string means compatibility data is unavailable.",
+        "responses": {
+          "200": {
+            "description": "Minecraft Java version ranges compatible with Bedrock players, grouped by server software",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fabric": {
+                      "type": "string"
+                    },
+                    "neoforge": {
+                      "type": "string"
+                    },
+                    "spigot": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fabric",
+                    "neoforge",
+                    "spigot"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

@@ -5,7 +5,7 @@ stdio server, embed it in another Go application, or deploy the optional AWS
 Lambda adapter.
 
 This first iteration provides one tool, `get_api_information`, which returns an
-OpenAPI document's title, version and description. OpenAPI operation conversion
+OpenAPI document's title, version and description. Complete schema graphs are loaded and validated; operation-to-tool conversion
 and REST execution are planned for later iterations.
 
 ## Run
@@ -32,6 +32,33 @@ The tool takes an empty object (`{}`) and returns structured JSON and text:
   "description": "Read public items from an example catalog."
 }
 ```
+
+## Local development
+
+Copy `.env.example` to `.env.local` and set `OPENAPI_URL` to the production schema
+of the API you want to test. `.env.local` is ignored by Git and never shipped.
+
+```sh
+cp .env.example .env.local
+make dev
+```
+
+The proxy runs locally at `http://127.0.0.1:8080/mcp`, fetching live schema metadata
+from the configured upstream. In another terminal:
+
+```sh
+make smoke
+make schema-check
+```
+
+`make schema-check` validates the complete live graph and prints only the entry
+document's paths and operation IDs. The smoke client uses the official MCP SDK to initialize, verify tool discovery,
+call `get_api_information` and print the returned metadata. It performs no
+upstream API operations beyond fetching the schema. It is an explicit development
+check, separate from the offline fixture tests in CI.
+
+`HTTP_ADDR` and `MCP_PATH` control the local address and route. Set `DEV_ENV_FILE`
+to use a different environment file. Stop the development server with Ctrl+C.
 
 ## Configuration
 
@@ -61,14 +88,37 @@ session credential cache, or global authenticated schema. A changed schema is
 visible on the next listing or tool call. Invalid JSON-RPC requests, unknown
 tools and transport acknowledgements do not fetch schema data.
 
-Schema requests inherit the caller's context, time out after 10 seconds and
-accept at most 1 MiB. HTTP MCP request bodies are also limited to 1 MiB. Logs are
+Schema requests inherit the caller's context; the complete load has a 10-second
+deadline. Each document is limited to 1 MiB, and the graph to 8 MiB and 16
+documents. The byte limits also apply after URI normalization, preventing short
+references from expanding into an oversized graph. JSON nesting is limited to 64
+and reference depth to 32. HTTP MCP request bodies are also limited to 1 MiB. Logs are
 JSON on stderr; tool failures return a generic message without credentials or
 upstream response bodies.
 
-The server decodes and validates the Info Object using
-`github.com/getkin/kin-openapi/openapi3`. It does not resolve or fetch path
-references. `github.com/modelcontextprotocol/go-sdk/mcp` provides the MCP protocol
+`proxy.NewSchemaLoader` returns a concurrency-safe loader whose `Load` method
+fetches, resolves and validates the entry and all referenced OpenAPI documents
+using `github.com/getkin/kin-openapi/openapi3`. A loader reuses its HTTP client;
+each load owns its graph, credentials and parser. A unique document is fetched
+once per load. No partial graph is returned after a source outage or validation
+failure, and later loads can recover without reusing stale authenticated data.
+
+External references must stay on the configured origin. Documents referenced
+directly by the entry are admitted automatically; additional transitive document
+URLs require `SchemaOptions.AllowedURLs`. Redirects and local-file references are
+rejected. References are normalized against each source document before parsing;
+URI fragments are decoded before JSON Pointer escapes. Only entry-selected paths
+appear in the returned entry, even when a source contains other operations.
+
+The compatibility profile covers JSON OpenAPI 3.0/3.1 documents, referenced
+standalone JSON schemas, recursive local/external references, 3.0 `nullable`,
+3.1 type unions and JSON Pointer fragments. `$id` is accepted when it leaves the
+document base unchanged. Base-changing `$id`, named anchors and dynamic references
+are rejected with diagnostics rather than silently misresolved. YAML, Swagger 2
+and parser-unsupported OpenAPI features (including `components.pathItems`) are
+not currently admitted. `SchemaOptions.Limits` can override the default bounds.
+
+`github.com/modelcontextprotocol/go-sdk/mcp` provides the MCP protocol
 and transport support. HTTP uses stateless, buffered JSON responses; GET and
 DELETE return 405 and notifications do not open a persistent SSE stream.
 
@@ -112,6 +162,8 @@ IAM and publication are managed by the consuming deployment.
 
 Tests use independent fixtures and loopback servers. They cover official SDK
 calls, concurrent credential isolation, anonymous initialization, schema changes,
-authentication errors, non-HTTP reuse, bounds, redirects and Lambda envelopes.
+authentication errors, non-HTTP reuse, bounds, redirects and Lambda envelopes. Graph fixtures also verify the seven
+entry operations, deduplicated source fetches, source-local bases, escaped pointers,
+recursion, null/union preservation, admission and failure recovery.
 CI runs race tests only and produces no binary artifacts. Consumers build their
 own binaries using the targets above.

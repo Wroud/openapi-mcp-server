@@ -1,0 +1,112 @@
+{
+  "openapi": "3.1.0",
+  "servers": [
+    {
+      "url": "/api/loader-support"
+    }
+  ],
+  "info": {
+    "title": "Minecraft server versions",
+    "description": "Find Minecraft versions with available builds for each supported server software.",
+    "version": "1.0.0"
+  },
+  "components": {
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/versions": {
+      "get": {
+        "operationId": "getLoaderVersions",
+        "security": [],
+        "tags": [
+          "loader-support"
+        ],
+        "summary": "List available Minecraft versions by server software",
+        "description": "Returns Minecraft versions with available builds for supported server software. Vanilla and Forge are omitted from these lists.",
+        "responses": {
+          "200": {
+            "description": "Available Minecraft versions grouped by server software; Vanilla and Forge are omitted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "VANILLA": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "FABRIC": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "FORGE": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "NEOFORGE": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "PAPER": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "PUFFERFISH": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "PURPUR": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "LEAF": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "FOLIA": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "QUILT": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

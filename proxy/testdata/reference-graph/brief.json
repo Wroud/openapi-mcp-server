@@ -1,0 +1,90 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Map-enabled server lookup",
+    "description": "Look up the display name of a Minecraft server with an installed world map using its hostname.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "components": {
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/api/server-brief": {
+      "get": {
+        "operationId": "getServerBrief",
+        "security": [],
+        "tags": [
+          "server-brief"
+        ],
+        "summary": "Look up a map-enabled server by hostname",
+        "description": "Returns the display name of a server with an installed world map. Unknown hostnames and servers without a world map return 404.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "description": "Server hostname without a URL scheme, port or path."
+            },
+            "required": true,
+            "description": "Server hostname without a URL scheme, port or path.",
+            "name": "domain",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Display name of the matching server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No map-enabled server for this domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

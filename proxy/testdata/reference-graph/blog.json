@@ -1,0 +1,366 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Blog articles",
+    "description": "Browse published articles and read their content and author details.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api/blog"
+    }
+  ],
+  "components": {
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/posts": {
+      "get": {
+        "operationId": "listBlogPosts",
+        "security": [],
+        "tags": [
+          "blog"
+        ],
+        "summary": "List published blog articles",
+        "description": "For anonymous requests, returns published article summaries and author details, newest first. Articles scheduled for future publication are not included.",
+        "responses": {
+          "200": {
+            "description": "Article summaries and author details",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "posts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "coverKey": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "coverAlt": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "coverWidth": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "coverHeight": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "slug": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 60,
+                            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          },
+                          "description": {
+                            "type": "string",
+                            "maxLength": 300
+                          },
+                          "category": {
+                            "type": "string",
+                            "enum": [
+                              "guides",
+                              "performance",
+                              "mods",
+                              "crossplay",
+                              "cost",
+                              "product"
+                            ]
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            },
+                            "maxItems": 8
+                          },
+                          "featured": {
+                            "type": "boolean"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "draft",
+                              "published"
+                            ]
+                          },
+                          "publishedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "wordCount": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "author": {
+                            "type": "object",
+                            "properties": {
+                              "displayName": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "role": {
+                                "type": "string",
+                                "maxLength": 80
+                              },
+                              "bio": {
+                                "type": "string",
+                                "maxLength": 500
+                              }
+                            },
+                            "required": [
+                              "displayName",
+                              "role",
+                              "bio"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "slug",
+                          "title",
+                          "description",
+                          "category",
+                          "tags",
+                          "featured",
+                          "status",
+                          "publishedAt",
+                          "wordCount",
+                          "author"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "posts"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/posts/{slug}": {
+      "get": {
+        "operationId": "getBlogPost",
+        "security": [],
+        "tags": [
+          "blog"
+        ],
+        "summary": "Read a published blog article by slug",
+        "description": "Returns the full article content, publication details and author information for the supplied slug. Drafts and articles scheduled for future publication return 404.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 60,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "description": "URL slug of an article returned by the blog article list."
+            },
+            "required": true,
+            "description": "URL slug of an article returned by the blog article list.",
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full article content, publication details and author information",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "post": {
+                      "type": "object",
+                      "properties": {
+                        "coverKey": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "coverAlt": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "coverWidth": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "coverHeight": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "slug": {
+                          "type": "string",
+                          "minLength": 3,
+                          "maxLength": 60,
+                          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "description": {
+                          "type": "string",
+                          "maxLength": 300
+                        },
+                        "category": {
+                          "type": "string",
+                          "enum": [
+                            "guides",
+                            "performance",
+                            "mods",
+                            "crossplay",
+                            "cost",
+                            "product"
+                          ]
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 32
+                          },
+                          "maxItems": 8
+                        },
+                        "featured": {
+                          "type": "boolean"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published"
+                          ]
+                        },
+                        "publishedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "wordCount": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "author": {
+                          "type": "object",
+                          "properties": {
+                            "displayName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "role": {
+                              "type": "string",
+                              "maxLength": 80
+                            },
+                            "bio": {
+                              "type": "string",
+                              "maxLength": 500
+                            }
+                          },
+                          "required": [
+                            "displayName",
+                            "role",
+                            "bio"
+                          ]
+                        },
+                        "seoTitle": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 70
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "body": {
+                          "type": "string",
+                          "maxLength": 120000
+                        }
+                      },
+                      "required": [
+                        "slug",
+                        "title",
+                        "description",
+                        "category",
+                        "tags",
+                        "featured",
+                        "status",
+                        "publishedAt",
+                        "wordCount",
+                        "author",
+                        "updatedAt",
+                        "body"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "post"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Post not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

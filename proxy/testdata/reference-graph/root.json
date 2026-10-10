@@ -1,0 +1,37 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Example Public API",
+    "version": "1.0.0",
+    "description": "Compare Minecraft server prices, check software and Bedrock compatibility, read published articles and look up map-enabled server names."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [],
+  "paths": {
+    "/api/pricing/catalog": {
+      "$ref": "/api/pricing/openapi.json#/paths/~1catalog"
+    },
+    "/api/pricing/recommended-region": {
+      "$ref": "/api/pricing/openapi.json#/paths/~1recommended-region"
+    },
+    "/api/loader-support/versions": {
+      "$ref": "/api/loader-support/openapi.json#/paths/~1versions"
+    },
+    "/api/bedrock-support/range": {
+      "$ref": "/api/bedrock-support/openapi.json#/paths/~1range"
+    },
+    "/api/blog/posts": {
+      "$ref": "/api/blog/openapi.json#/paths/~1posts"
+    },
+    "/api/blog/posts/{slug}": {
+      "$ref": "/api/blog/openapi.json#/paths/~1posts~1%7Bslug%7D"
+    },
+    "/api/server-brief": {
+      "$ref": "/api/server-brief/openapi.json#/paths/~1api~1server-brief"
+    }
+  }
+}

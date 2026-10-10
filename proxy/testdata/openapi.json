@@ -7,7 +7,16 @@
   },
   "paths": {
     "/items": {
-      "$ref": "https://unavailable.example/openapi.json#/paths/~1items"
+      "$ref": "#/paths/~1shared"
+    },
+    "/shared": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Items"
+          }
+        }
+      }
     }
   }
 }

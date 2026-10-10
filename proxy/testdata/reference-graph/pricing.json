@@ -1,0 +1,340 @@
+{
+  "openapi": "3.1.0",
+  "servers": [
+    {
+      "url": "/api/pricing"
+    }
+  ],
+  "info": {
+    "title": "Server pricing and regions",
+    "description": "Compare Minecraft server prices by region, server size and play schedule, and find a region for the caller's location.",
+    "version": "1.0.0"
+  },
+  "components": {
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/catalog": {
+      "get": {
+        "operationId": "getPricingCatalog",
+        "security": [],
+        "tags": [
+          "pricing"
+        ],
+        "summary": "Compare server prices by region and play schedule",
+        "description": "Returns monthly server prices for available regions, server sizes and play schedules. Includes reference prices for always-on hosting when available.",
+        "responses": {
+          "200": {
+            "description": "Monthly server prices by region, server size and play schedule",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "regions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "awsRegion": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "displayName": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "instances": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "size": {
+                                  "type": "string",
+                                  "enum": [
+                                    "c.medium",
+                                    "m.medium",
+                                    "r.medium",
+                                    "c.large",
+                                    "m.large",
+                                    "r.large",
+                                    "c.xlarge",
+                                    "m.xlarge",
+                                    "r.xlarge",
+                                    "m.2xlarge",
+                                    "r.2xlarge",
+                                    "r.4xlarge"
+                                  ],
+                                  "description": "The size class this price is for; absent from a catalog built before sizes"
+                                },
+                                "scenarios": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "enum": [
+                                          "casual",
+                                          "regular",
+                                          "evenings"
+                                        ]
+                                      },
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "caption": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "hoursPerMonth": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      },
+                                      "monthlyCents": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "label",
+                                      "caption",
+                                      "hoursPerMonth",
+                                      "monthlyCents"
+                                    ]
+                                  }
+                                },
+                                "crossoverHoursPerDay": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0,
+                                  "description": "Awake hours a day, played every day, at which this size costs what the classic-reference plan with the same memory costs. Absent when no reference price exists or hourly stays cheaper all month."
+                                }
+                              },
+                              "required": [
+                                "scenarios"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "awsRegion",
+                          "displayName",
+                          "instances"
+                        ]
+                      }
+                    },
+                    "classicReference": {
+                      "type": "object",
+                      "properties": {
+                        "checkedDate": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "hosts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "checkedDate": {
+                                "type": "string",
+                                "format": "date"
+                              },
+                              "tiers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "memoryGb": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "monthlyCents": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "memoryGb",
+                                    "monthlyCents"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "checkedDate",
+                              "tiers"
+                            ]
+                          }
+                        },
+                        "instances": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "size": {
+                                "type": "string",
+                                "enum": [
+                                  "c.medium",
+                                  "m.medium",
+                                  "r.medium",
+                                  "c.large",
+                                  "m.large",
+                                  "r.large",
+                                  "c.xlarge",
+                                  "m.xlarge",
+                                  "r.xlarge",
+                                  "m.2xlarge",
+                                  "r.2xlarge",
+                                  "r.4xlarge"
+                                ]
+                              },
+                              "monthlyCents": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0
+                              }
+                            },
+                            "required": [
+                              "monthlyCents"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "checkedDate",
+                        "hosts",
+                        "instances"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "regions"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No priced regions available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recommended-region": {
+      "get": {
+        "operationId": "getRecommendedRegion",
+        "security": [],
+        "tags": [
+          "pricing"
+        ],
+        "summary": "Find a server region for the caller's location",
+        "description": "Uses the location of the caller making this request. When called through a proxy, the recommendation describes the proxy's location rather than the end user's.",
+        "responses": {
+          "200": {
+            "description": "Recommended server region identifier",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recommendedRegionId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "recommendedRegionId"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No regions available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}
