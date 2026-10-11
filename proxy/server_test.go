@@ -65,7 +65,7 @@ func TestSDKMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != "get_api_information" {
+	if len(tools.Tools) < 1 || tools.Tools[0].Name != "get_api_information" {
 		t.Fatalf("tools: %+v", tools.Tools)
 	}
 	beforeCall := fetches.Load()
@@ -88,8 +88,8 @@ func TestSDKMetadata(t *testing.T) {
 		t.Fatalf("info: %+v; fetches: %d", actual, fetches.Load())
 	}
 	_, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "unknown", Arguments: map[string]any{}})
-	if err == nil || fetches.Load() != beforeCall+1 {
-		t.Fatal("unknown tool reached upstream")
+	if err == nil || fetches.Load() != beforeCall+2 {
+		t.Fatal("unknown tool did not refresh the current schema")
 	}
 	unavailable.Store(true)
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "get_api_information", Arguments: map[string]any{}})

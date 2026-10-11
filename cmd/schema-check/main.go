@@ -35,10 +35,20 @@ func run() error {
 			paths[path] = methods
 		}
 	}
+	catalog, err := proxy.BuildCatalog(document, os.Getenv("OPENAPI_URL"), os.Getenv("BACKEND_URL"))
+	if err != nil {
+		return err
+	}
+	supported := []string{}
+	for _, operation := range catalog.Operations {
+		supported = append(supported, operation.Tool.Name)
+	}
 	output := struct {
-		API   proxy.APIInfo                `json:"api"`
-		Paths map[string]map[string]string `json:"paths"`
-	}{API: proxy.APIInfo{Title: document.Info.Title, Version: document.Info.Version, Description: document.Info.Description}, Paths: paths}
+		API       proxy.APIInfo                `json:"api"`
+		Paths     map[string]map[string]string `json:"paths"`
+		Supported []string                     `json:"supported"`
+		Skipped   []proxy.SkippedOperation     `json:"skipped"`
+	}{API: proxy.APIInfo{Title: document.Info.Title, Version: document.Info.Version, Description: document.Info.Description}, Paths: paths, Supported: supported, Skipped: catalog.Skipped}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(output)

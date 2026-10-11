@@ -13,7 +13,7 @@ import (
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	config := proxy.Config{SchemaURL: os.Getenv("OPENAPI_URL")}
+	config := proxy.Config{SchemaURL: os.Getenv("OPENAPI_URL"), BackendURL: os.Getenv("BACKEND_URL")}
 	if headers, ok := os.LookupEnv("AUTH_HEADERS"); ok {
 		config.AuthHeaders = []string{}
 		if headers != "" {

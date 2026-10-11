@@ -33,8 +33,14 @@ func run(endpoint string) error {
 	if err != nil {
 		return fmt.Errorf("list tools: %w", err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != "get_api_information" {
-		return fmt.Errorf("expected get_api_information as the only tool, got %d tools", len(tools.Tools))
+	metadata := false
+	for _, tool := range tools.Tools {
+		if tool.Name == "get_api_information" {
+			metadata = true
+		}
+	}
+	if !metadata {
+		return fmt.Errorf("expected get_api_information among the tools, got %d tools", len(tools.Tools))
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_api_information", Arguments: map[string]any{}})
 	if err != nil {
@@ -62,7 +68,7 @@ func run(endpoint string) error {
 		Endpoint string `json:"endpoint"`
 		Tool     string `json:"tool"`
 		API      any    `json:"api"`
-	}{Endpoint: endpoint, Tool: tools.Tools[0].Name, API: result.StructuredContent}
+	}{Endpoint: endpoint, Tool: "get_api_information", API: result.StructuredContent}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(output)

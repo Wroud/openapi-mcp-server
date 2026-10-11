@@ -4,9 +4,9 @@ A reusable OpenAPI-to-MCP server written in Go. Use it as a standalone HTTP or
 stdio server, embed it in another Go application, or deploy the optional AWS
 Lambda adapter.
 
-This first iteration provides one tool, `get_api_information`, which returns an
-OpenAPI document's title, version and description. Complete schema graphs are loaded and validated; operation-to-tool conversion
-and REST execution are planned for later iterations.
+The server exposes `get_api_information` and tools generated from supported
+OpenAPI operations. It deliberately supports a practical subset rather than
+interpreting every valid OpenAPI feature.
 
 ## Run
 
@@ -65,6 +65,7 @@ to use a different environment file. Stop the development server with Ctrl+C.
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `OPENAPI_URL` | Required | Absolute HTTP(S) URL of the OpenAPI JSON document. |
+| `BACKEND_URL` | First root server, or schema origin | Explicit HTTP(S) backend base URL override. |
 | `MCP_PATH` | `/mcp` | HTTP path serving MCP. |
 | `HTTP_ADDR` | `127.0.0.1:8080` | Standalone HTTP listen address. |
 | `AUTH_HEADERS` | `Authorization,Cookie,X-Api-Key` | Comma-separated credential headers forwarded to the schema endpoint. Set empty to forward none. |
@@ -77,7 +78,9 @@ configured as authentication headers.
 
 MCP initialization and protocol discovery fetch the current schema anonymously,
 even when the initializing client supplies credentials. Tool listing fetches it
-again with that request's credentials. Each `get_api_information` call also
+again with that request's credentials and generates only that caller's eligible
+operations. Generated calls reload and resolve the operation against the current
+schema before validating and executing it. Each `get_api_information` call also
 fetches it with the calling request's credentials, or anonymously when absent.
 Only configured authentication headers are forwarded. A schema authentication
 failure returns an error; it never falls back to anonymous metadata.
@@ -85,8 +88,10 @@ failure returns an error; it never falls back to anonymous metadata.
 One server instance and HTTP client can serve multiple parallel requests.
 Credentials and schema results stay request scoped: no shared cookie jar,
 session credential cache, or global authenticated schema. A changed schema is
-visible on the next listing or tool call. Invalid JSON-RPC requests, unknown
-tools and transport acknowledgements do not fetch schema data.
+visible on the next listing or tool call. Unknown operation names can refresh the schema, but never reach the REST backend.
+Transport acknowledgements do not fetch schema data. Tools use stable operation
+IDs; clients may need to refresh discovery after an API change. Listings are
+private and immediately stale; no caller-specific tools enter the shared SDK registry.
 
 Schema requests inherit the caller's context; the complete load has a 10-second
 deadline. Each document is limited to 1 MiB, and the graph to 8 MiB and 16
@@ -121,6 +126,51 @@ not currently admitted. `SchemaOptions.Limits` can override the default bounds.
 `github.com/modelcontextprotocol/go-sdk/mcp` provides the MCP protocol
 and transport support. HTTP uses stateless, buffered JSON responses; GET and
 DELETE return 405 and notifications do not open a persistent SSE stream.
+
+## Supported REST operations
+
+Only entry-selected paths are considered. Tool names use `operationId`, or a
+stable method/path fallback; naming collisions fail discovery. Unsupported
+operations are skipped with reasons shown by `make schema-check`.
+
+Supported inputs are scalar path/query parameters, nonempty scalar query arrays
+serialized as repeated keys, and `application/json` request bodies. Path Item
+parameters are combined with operation parameters; operation definitions win.
+MCP inputs use these groups:
+
+```json
+{
+  "path": {"id": "123"},
+  "query": {"tag": ["one", "two"]},
+  "body": {"name": "Example"}
+}
+```
+
+There is no headers argument. Configured credentials come from trusted request
+context and are forwarded per call. Unknown groups/parameters, invalid values and
+unsafe paths are rejected before any REST request.
+
+Input schemas describe primitives, objects, arrays, required fields, enums,
+bounds, patterns and nullable types. Runtime validation uses the original
+kin-openapi schemas, enabling JSON Schema 2020-12 for OpenAPI 3.1. Polymorphic
+compositions, recursive inputs, complex query objects, multipart, binary and
+non-JSON request bodies are skipped. Conversion is bounded to 12 levels, 2,048
+nodes and 64 KiB per tool; catalogs are limited to 128 tools and 1 MiB.
+
+The first root server is used, resolving relative URLs against `OPENAPI_URL` and
+substituting declared server-variable defaults. Without `BACKEND_URL`, its origin
+must match the schema origin. An explicit backend override is trusted operator
+configuration and replaces the server base URL. Path Item/operation server
+overrides are skipped unless an explicit backend makes the destination clear.
+Base paths are preserved and path arguments are encoded as segments.
+
+REST requests have a 10-second deadline, inherit cancellation, reject redirects
+and use no cookie jar or proxy-level retries. Requests and upstream responses are
+limited to 1 MiB; encoded MCP results are capped at 2 MiB. JSON objects return
+structured content plus text; arrays/scalars and non-JSON responses return text.
+HTTP failures preserve their status with a bounded error body, redact forwarded
+credentials and set `IsError`. Transport errors return concise proxy messages.
+Responses are not validated against response schemas or streamed.
 
 ## Embed or extend
 
@@ -157,7 +207,7 @@ make test lint build
 `make build-lambda` builds `dist/bootstrap.zip`, containing a static Linux ARM64
 executable for `provided.al2023`. The separate `cmd/openapi-mcp-lambda` command
 uses the AWS HTTP API v2 adapter. Set the Lambda handler to `bootstrap` and
-configure `OPENAPI_URL`; `MCP_PATH` can match the gateway route. Infrastructure,
+configure `OPENAPI_URL`; `MCP_PATH` can match the gateway route. Set `BACKEND_URL` only when the root server is insufficient. Infrastructure,
 IAM and publication are managed by the consuming deployment.
 
 Tests use independent fixtures and loopback servers. They cover official SDK
