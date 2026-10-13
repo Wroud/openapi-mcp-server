@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -23,6 +24,7 @@ type SchemaLimits struct {
 	ReferenceDepth int
 	JSONDepth      int
 	Timeout        time.Duration
+	SourceTimeout  time.Duration
 }
 
 type SchemaOptions struct {
@@ -46,15 +48,37 @@ type schemaDocument struct {
 }
 
 type schemaLoad struct {
-	loader      *SchemaLoader
-	ctx         context.Context
-	credentials http.Header
-	allowed     map[string]bool
-	documents   map[string]*schemaDocument
-	bytes       int64
-	active      map[string]bool
-	heights     map[string]int
+	loader    *SchemaLoader
+	ctx       context.Context
+	fetches   *schemaFetches
+	allowed   map[string]bool
+	documents map[string]*schemaDocument
+	active    map[string]bool
+	heights   map[string]int
 }
+
+type schemaFetches struct {
+	credentials http.Header
+	results     map[string]*schemaFetch
+	bytes       int64
+	edges       map[string]map[string]bool
+}
+
+type schemaFetch struct {
+	data []byte
+	err  error
+}
+
+type sourceError struct {
+	key  string
+	ref  string
+	path string
+	err  error
+}
+
+func (err *sourceError) Error() string { return err.err.Error() }
+
+func (err *sourceError) Unwrap() error { return err.err }
 
 func NewSchemaLoader(schemaURL string, options SchemaOptions) (*SchemaLoader, error) {
 	root, err := url.Parse(schemaURL)
@@ -80,7 +104,10 @@ func NewSchemaLoader(schemaURL string, options SchemaOptions) (*SchemaLoader, er
 	if limits.Timeout == 0 {
 		limits.Timeout = 10 * time.Second
 	}
-	if limits.DocumentBytes < 1 || limits.TotalBytes < 1 || limits.Documents < 1 || limits.ReferenceDepth < 1 || limits.JSONDepth < 1 || limits.Timeout < 0 {
+	if limits.SourceTimeout == 0 {
+		limits.SourceTimeout = limits.Timeout / 2
+	}
+	if limits.DocumentBytes < 1 || limits.TotalBytes < 1 || limits.Documents < 1 || limits.ReferenceDepth < 1 || limits.JSONDepth < 1 || limits.Timeout < 0 || limits.SourceTimeout < 0 {
 		return nil, errors.New("schema limits must be positive")
 	}
 	client := *http.DefaultClient
@@ -141,14 +168,44 @@ func documentKey(location *url.URL) string {
 func (loader *SchemaLoader) Load(ctx context.Context, credentials http.Header) (*openapi3.T, error) {
 	ctx, cancel := context.WithTimeout(ctx, loader.limits.Timeout)
 	defer cancel()
-	state := &schemaLoad{loader: loader, ctx: ctx, credentials: credentials.Clone(), allowed: make(map[string]bool), documents: make(map[string]*schemaDocument), active: make(map[string]bool), heights: make(map[string]int)}
+	fetches := &schemaFetches{credentials: credentials.Clone(), results: make(map[string]*schemaFetch), edges: make(map[string]map[string]bool)}
+	dropped := make(map[string]bool)
+	for {
+		state := &schemaLoad{loader: loader, ctx: ctx, fetches: fetches, allowed: make(map[string]bool), documents: make(map[string]*schemaDocument), active: make(map[string]bool), heights: make(map[string]int)}
+		entry, err := state.load(dropped)
+		var source *sourceError
+		if err == nil || !errors.As(err, &source) || source.key == documentKey(loader.root) {
+			return entry, err
+		}
+		paths := state.referencing(source.ref, dropped)
+		if len(paths) == 0 {
+			paths = state.dependents(source.key, dropped)
+		}
+		if len(paths) == 0 {
+			return nil, err
+		}
+		for _, path := range paths {
+			dropped[path] = true
+		}
+		slog.ErrorContext(ctx, "API schema source unavailable; dropping the paths that reference it", "metric_name", "UnhandledHttpError", "source", source.path, "paths", paths, "error", source.err)
+	}
+}
+
+func (state *schemaLoad) load(dropped map[string]bool) (*openapi3.T, error) {
+	ctx, loader := state.ctx, state.loader
 	for key := range loader.allowed {
 		state.allowed[key] = true
 	}
-	state.allowed[documentKey(loader.root)] = true
+	rootKey := documentKey(loader.root)
+	state.allowed[rootKey] = true
 	root, err := state.document(loader.root)
 	if err != nil {
 		return nil, err
+	}
+	if paths, ok := root.tree.(map[string]any)["paths"].(map[string]any); ok {
+		for path := range dropped {
+			delete(paths, path)
+		}
 	}
 	if err := state.admit(root.tree, root.location, 0, false); err != nil {
 		return nil, err
@@ -215,9 +272,12 @@ func (loader *SchemaLoader) Load(ctx context.Context, credentials http.Header) (
 	}
 	keys := make([]string, 0, len(state.documents))
 	for key := range state.documents {
-		keys = append(keys, key)
+		if key != rootKey {
+			keys = append(keys, key)
+		}
 	}
 	slices.Sort(keys)
+	keys = append(keys, rootKey)
 	var entry *openapi3.T
 	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
@@ -228,13 +288,20 @@ func (loader *SchemaLoader) Load(ctx context.Context, credentials http.Header) (
 			continue
 		}
 		doc, err := parser.LoadFromDataWithPath(raw.data, raw.location)
+		if err == nil {
+			if err = doc.Validate(ctx); err != nil {
+				err = fmt.Errorf("validate schema %s: %w", raw.location.Path, err)
+			}
+		} else {
+			err = fmt.Errorf("resolve schema %s: %w", raw.location.Path, err)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("resolve schema %s: %w", raw.location.Path, err)
+			if key == rootKey {
+				return nil, err
+			}
+			return nil, &sourceError{key: key, path: raw.location.Path, err: err}
 		}
-		if err := doc.Validate(ctx); err != nil {
-			return nil, fmt.Errorf("validate schema %s: %w", raw.location.Path, err)
-		}
-		if key == documentKey(loader.root) {
+		if key == rootKey {
 			entry = doc
 		}
 	}
@@ -242,6 +309,73 @@ func (loader *SchemaLoader) Load(ctx context.Context, credentials http.Header) (
 		return nil, err
 	}
 	return entry, nil
+}
+
+func (state *schemaLoad) referencing(ref string, dropped map[string]bool) []string {
+	root := state.documents[documentKey(state.loader.root)]
+	if ref == "" || root == nil {
+		return nil
+	}
+	items, _ := root.tree.(map[string]any)["paths"].(map[string]any)
+	paths := []string{}
+	for path, item := range items {
+		object, _ := item.(map[string]any)
+		raw, ok := object["$ref"].(string)
+		if !ok || dropped[path] {
+			continue
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		target := root.location.ResolveReference(parsed)
+		if documentKey(target)+"#"+target.Fragment == ref {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func (state *schemaLoad) dependents(failed string, dropped map[string]bool) []string {
+	rootKey := documentKey(state.loader.root)
+	root := state.documents[rootKey]
+	if root == nil {
+		return nil
+	}
+	items, _ := root.tree.(map[string]any)["paths"].(map[string]any)
+	paths := []string{}
+	for path, item := range items {
+		object, _ := item.(map[string]any)
+		ref, ok := object["$ref"].(string)
+		if !ok || dropped[path] {
+			continue
+		}
+		parsed, err := url.Parse(ref)
+		if err != nil {
+			continue
+		}
+		start := documentKey(root.location.ResolveReference(parsed))
+		if start == rootKey {
+			continue
+		}
+		seen := map[string]bool{start: true}
+		queue := []string{start}
+		for len(queue) > 0 && !seen[failed] {
+			current := queue[0]
+			queue = queue[1:]
+			for next := range state.fetches.edges[current] {
+				if next != rootKey && !seen[next] {
+					seen[next] = true
+					queue = append(queue, next)
+				}
+			}
+		}
+		if seen[failed] {
+			paths = append(paths, path)
+		}
+	}
+	slices.Sort(paths)
+	return paths
 }
 
 func (state *schemaLoad) document(location *url.URL) (*schemaDocument, error) {
@@ -258,55 +392,31 @@ func (state *schemaLoad) document(location *url.URL) (*schemaDocument, error) {
 	if !state.allowed[key] {
 		return nil, errors.New("schema URL is not admitted by the entry document or configuration")
 	}
-	if len(state.documents) >= state.loader.limits.Documents {
-		return nil, errors.New("schema document count limit exceeded")
-	}
-	request, err := http.NewRequestWithContext(state.ctx, http.MethodGet, key, nil)
+	data, err := state.fetch(key, location)
 	if err != nil {
 		return nil, err
 	}
-	request.Header = state.credentials.Clone()
-	if request.Header == nil {
-		request.Header = make(http.Header)
-	}
-	request.Header.Set("Accept", "application/json")
-	response, err := state.loader.client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("schema %s returned HTTP %d", location.Path, response.StatusCode)
-	}
-	remaining := state.loader.limits.TotalBytes - state.bytes
-	limit := min(remaining, state.loader.limits.DocumentBytes)
-	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, errors.New("schema document or total byte limit exceeded")
-	}
+	failure := func(err error) error { return &sourceError{key: key, path: location.Path, err: err} }
 	var tree any
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.UseNumber()
 	if err := decoder.Decode(&tree); err != nil {
-		return nil, fmt.Errorf("schema must be JSON: %w", err)
+		return nil, failure(fmt.Errorf("schema must be JSON: %w", err))
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, errors.New("schema has trailing JSON data")
+		return nil, failure(errors.New("schema has trailing JSON data"))
 	}
 	if err := checkJSONDepth(tree, 0, state.loader.limits.JSONDepth); err != nil {
-		return nil, err
+		return nil, failure(err)
 	}
 	object, objectOK := tree.(map[string]any)
 	_, booleanOK := tree.(bool)
 	if !objectOK && !booleanOK {
-		return nil, errors.New("schema document must be a JSON object or boolean schema")
+		return nil, failure(errors.New("schema document must be a JSON object or boolean schema"))
 	}
 	version, full := object["openapi"].(string)
 	if _, present := object["openapi"]; present && !full {
-		return nil, errors.New("invalid OpenAPI version")
+		return nil, failure(errors.New("invalid OpenAPI version"))
 	}
 	if key == documentKey(state.loader.root) && !full {
 		return nil, errors.New("entry must be an OpenAPI document")
@@ -314,10 +424,10 @@ func (state *schemaLoad) document(location *url.URL) (*schemaDocument, error) {
 	if full {
 		parts := strings.Split(version, ".")
 		if len(parts) != 3 || parts[0] != "3" || (parts[1] != "0" && parts[1] != "1") {
-			return nil, errors.New("only OpenAPI 3.0 and 3.1 documents are supported")
+			return nil, failure(errors.New("only OpenAPI 3.0 and 3.1 documents are supported"))
 		}
 		if _, err := strconv.ParseUint(parts[2], 10, 32); err != nil {
-			return nil, errors.New("invalid OpenAPI version")
+			return nil, failure(errors.New("invalid OpenAPI version"))
 		}
 	}
 	canonical, err := url.Parse(key)
@@ -326,8 +436,57 @@ func (state *schemaLoad) document(location *url.URL) (*schemaDocument, error) {
 	}
 	doc := &schemaDocument{data: data, tree: tree, location: canonical, full: full}
 	state.documents[key] = doc
-	state.bytes += int64(len(data))
 	return doc, nil
+}
+
+func (state *schemaLoad) fetch(key string, location *url.URL) ([]byte, error) {
+	fetches := state.fetches
+	if result := fetches.results[key]; result != nil {
+		return result.data, result.err
+	}
+	if len(fetches.results) >= state.loader.limits.Documents {
+		return nil, errors.New("schema document count limit exceeded")
+	}
+	ctx := state.ctx
+	if key != documentKey(state.loader.root) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, state.loader.limits.SourceTimeout)
+		defer cancel()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header = fetches.credentials.Clone()
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+	request.Header.Set("Accept", "application/json")
+	failure := func(err error) ([]byte, error) {
+		err = &sourceError{key: key, path: location.Path, err: err}
+		fetches.results[key] = &schemaFetch{err: err}
+		return nil, err
+	}
+	response, err := state.loader.client.Do(request)
+	if err != nil {
+		return failure(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return failure(fmt.Errorf("schema %s returned HTTP %d", location.Path, response.StatusCode))
+	}
+	remaining := state.loader.limits.TotalBytes - fetches.bytes
+	limit := min(remaining, state.loader.limits.DocumentBytes)
+	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil {
+		return failure(err)
+	}
+	if int64(len(data)) > limit {
+		return failure(errors.New("schema document or total byte limit exceeded"))
+	}
+	fetches.results[key] = &schemaFetch{data: data}
+	fetches.bytes += int64(len(data))
+	return data, nil
 }
 
 func skipSchemaData(key string, dictionary bool) bool {
@@ -408,7 +567,12 @@ func (state *schemaLoad) walk(node any, base *url.URL, nesting, depth int, dicti
 			if err := state.loader.checkLocation(location); err != nil {
 				return 0, err
 			}
-			key := documentKey(location) + "#" + location.Fragment
+			from, to := documentKey(base), documentKey(location)
+			if state.fetches.edges[from] == nil {
+				state.fetches.edges[from] = make(map[string]bool)
+			}
+			state.fetches.edges[from][to] = true
+			key := to + "#" + location.Fragment
 			if !state.active[key] {
 				next, done := state.heights[key]
 				if !done {
@@ -421,7 +585,11 @@ func (state *schemaLoad) walk(node any, base *url.URL, nesting, depth int, dicti
 					}
 					target, err := resolvePointer(doc.tree, location.Fragment)
 					if err != nil {
-						return 0, fmt.Errorf("reference %s: %w", location.Fragment, err)
+						failed := &sourceError{key: to, path: doc.location.Path, err: fmt.Errorf("reference %s: %w", location.Fragment, err)}
+						if from == documentKey(state.loader.root) {
+							failed.ref = key
+						}
+						return 0, failed
 					}
 					state.active[key] = true
 					next, err = state.walk(target, doc.location, 0, depth+1, false)

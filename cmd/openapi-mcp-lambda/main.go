@@ -13,14 +13,7 @@ import (
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	config := proxy.Config{SchemaURL: os.Getenv("OPENAPI_URL"), BackendURL: os.Getenv("BACKEND_URL")}
-	if headers, ok := os.LookupEnv("AUTH_HEADERS"); ok {
-		config.AuthHeaders = []string{}
-		if headers != "" {
-			config.AuthHeaders = strings.Split(headers, ",")
-		}
-	}
-	server, err := proxy.NewServer(config)
+	server, err := proxy.NewServer(proxy.ConfigFromEnv())
 	if err != nil {
 		slog.Error("Invalid configuration", "error", err)
 		os.Exit(1)

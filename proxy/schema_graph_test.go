@@ -1,14 +1,17 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -341,5 +344,139 @@ func TestCrossDocumentRecursionAndOpenAPI30Nullable(t *testing.T) {
 	}
 	if !node.Properties["nullable"].Value.Nullable {
 		t.Fatal("OpenAPI 3.0 nullable was lost")
+	}
+}
+
+func TestFailedSourceDropsDependentPaths(t *testing.T) {
+	root := `{"openapi":"3.1.0","info":{"title":"API","version":"1"},"paths":{
+"/api/public":{"get":{"operationId":"getPublic","responses":{"200":{"description":"OK"}}}},
+"/api/blog":{"$ref":"/blog.json#/paths/~1posts"},
+"/api/servers":{"$ref":"/servers.json#/paths/~1servers"},
+"/api/servers/{id}":{"$ref":"/servers.json#/paths/~1servers~1{id}"},
+"/api/shapes":{"$ref":"/shapes.json#/paths/~1shapes"}}}`
+	blog := `{"openapi":"3.1.0","info":{"title":"Blog","version":"1"},"paths":{"/posts":{"get":{"operationId":"listPosts","responses":{"200":{"description":"OK"}}}}}}`
+	servers := `{"openapi":"3.1.0","info":{"title":"Servers","version":"1"},"paths":{"/servers":{"get":{"operationId":"listServers","responses":{"200":{"description":"OK"}}}},"/servers/{id}":{"get":{"operationId":"getServer","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"OK"}}}}}}`
+	shapes := `{"openapi":"3.1.0","info":{"title":"Shapes","version":"1"},"paths":{"/shapes":{"get":{"operationId":"listShapes","responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"$ref":"/types.json#/components/schemas/Shape"}}}}}}}}}`
+	types := `{"openapi":"3.1.0","info":{"title":"Types","version":"1"},"components":{"schemas":{"Shape":{"type":"string"}}}}`
+	invalid := `{"openapi":"3.1.0","info":{"title":"Servers"},"paths":{"/servers":{"get":{"operationId":"listServers","responses":{"200":{"description":"OK"}}}},"/servers/{id}":{"get":{"operationId":"getServer","responses":{"200":{"description":"OK"}}}}}}`
+	for _, tc := range []struct {
+		name     string
+		failing  string
+		status   int
+		body     string
+		hang     bool
+		expected []string
+	}{
+		{"servers 401", "/servers.json", 401, "", false, []string{"/api/blog", "/api/public", "/api/shapes"}},
+		{"servers 500", "/servers.json", 500, "", false, []string{"/api/blog", "/api/public", "/api/shapes"}},
+		{"servers timeout", "/servers.json", 0, "", true, []string{"/api/blog", "/api/public", "/api/shapes"}},
+		{"servers invalid JSON", "/servers.json", 200, "{", false, []string{"/api/blog", "/api/public", "/api/shapes"}},
+		{"servers invalid document", "/servers.json", 200, invalid, false, []string{"/api/blog", "/api/public", "/api/shapes"}},
+		{"transitive types", "/types.json", 503, "", false, []string{"/api/blog", "/api/public", "/api/servers", "/api/servers/{id}"}},
+		{"servers stale pointer", "/servers.json", 200, `{"openapi":"3.1.0","info":{"title":"Servers","version":"1"},"paths":{"/servers":{"get":{"operationId":"listServers","responses":{"200":{"description":"OK"}}}}}}`, false, []string{"/api/blog", "/api/public", "/api/servers", "/api/shapes"}},
+		{"servers oversized", "/servers.json", 200, `{"pad":"` + strings.Repeat("x", 5000) + `"}`, false, []string{"/api/blog", "/api/public", "/api/shapes"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			documents := map[string]string{"/root.json": root, "/blog.json": blog, "/servers.json": servers, "/shapes.json": shapes, "/types.json": types}
+			var lock sync.Mutex
+			counts := make(map[string]int)
+			host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				lock.Lock()
+				counts[r.URL.Path]++
+				lock.Unlock()
+				if r.URL.Path == tc.failing {
+					if tc.hang {
+						<-r.Context().Done()
+						return
+					}
+					w.WriteHeader(tc.status)
+					fmt.Fprint(w, tc.body)
+					return
+				}
+				fmt.Fprint(w, documents[r.URL.Path])
+			}))
+			defer host.Close()
+			loader, err := NewSchemaLoader(host.URL+"/root.json", SchemaOptions{AllowedURLs: []string{"/types.json"}, Limits: SchemaLimits{Timeout: 2 * time.Second, SourceTimeout: 200 * time.Millisecond, DocumentBytes: 4096}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := loader.Load(context.Background(), http.Header{"Authorization": {"Bearer secret"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths := []string{}
+			for path := range doc.Paths.Map() {
+				paths = append(paths, path)
+			}
+			slices.Sort(paths)
+			if !slices.Equal(paths, tc.expected) {
+				t.Fatalf("paths: %v", paths)
+			}
+			lock.Lock()
+			defer lock.Unlock()
+			for path, count := range counts {
+				if count != 1 {
+					t.Fatalf("duplicate fetch for %s: %d", path, count)
+				}
+			}
+		})
+	}
+}
+
+func TestFailedSourceStillFailsSharedComponents(t *testing.T) {
+	root := `{"openapi":"3.1.0","info":{"title":"API","version":"1"},"paths":{"/api/servers":{"$ref":"/servers.json#/paths/~1servers"}},"components":{"schemas":{"X":{"$ref":"/servers.json#/components/schemas/X"}}}}`
+	host, _, _ := schemaTestHost(t, map[string]string{"/root.json": root})
+	loader, err := NewSchemaLoader(host.URL+"/root.json", SchemaOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loader.Load(context.Background(), nil); err == nil {
+		t.Fatal("a source referenced outside Path Items did not fail the load")
+	}
+}
+
+func TestDegradedProxyServesRemainingTools(t *testing.T) {
+	root := `{"openapi":"3.1.0","info":{"title":"API","version":"1"},"paths":{
+"/api/public":{"get":{"operationId":"getPublic","responses":{"200":{"description":"OK"}}}},
+"/api/servers":{"$ref":"/servers.json#/paths/~1servers"}}}`
+	var backend atomic.Int32
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/root.json":
+			fmt.Fprint(w, root)
+		case "/servers.json":
+			w.WriteHeader(401)
+		default:
+			backend.Add(1)
+			fmt.Fprint(w, `{"ok":true}`)
+		}
+	}))
+	defer host.Close()
+	var buffer bytes.Buffer
+	var lock sync.Mutex
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(lockedWriter{&buffer, &lock}, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	server, err := NewServer(Config{SchemaURL: host.URL + "/root.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHTTPHandler(server)
+	if result := rpc(t, handler, "initialize", nil); result["error"] != nil {
+		t.Fatalf("initialize: %s", result)
+	}
+	listing := rpc(t, handler, "tools/list", http.Header{"Authorization": {"Bearer secret-token"}})
+	if listing["error"] != nil || !strings.Contains(string(listing["result"]), "getPublic") || strings.Contains(string(listing["result"]), "listServers") {
+		t.Fatalf("listing: %s", listing)
+	}
+	result := decodeResult(t, post(t, handler, callBody("getPublic"), nil))
+	if result.IsError || backend.Load() != 1 {
+		t.Fatalf("public call: %+v", result)
+	}
+	lock.Lock()
+	logged := buffer.String()
+	lock.Unlock()
+	if !strings.Contains(logged, `"metric_name":"UnhandledHttpError"`) || !strings.Contains(logged, "/servers.json") || strings.Contains(logged, "secret-token") {
+		t.Fatalf("degradation log: %s", logged)
 	}
 }

@@ -23,6 +23,7 @@ type Operation struct {
 	BodyRequired   bool
 	Backend        *url.URL
 	JSONSchema2020 bool
+	Protected      bool
 }
 
 type SkippedOperation struct {
@@ -81,15 +82,19 @@ func BuildCatalog(document *openapi3.T, schemaURL, backendOverride string) (Cata
 			definition := item.Operations()[method]
 			name := definition.OperationID
 			if name == "" {
-				name = strings.ToLower(method) + "_" + regexp.MustCompile(`[^a-zA-Z0-9_]`).ReplaceAllString(strings.Trim(path, "/"), "_")
+				name = strings.ToLower(method) + "_" + unsafeNameCharacters.ReplaceAllString(strings.Trim(path, "/"), "_")
 			}
 			if names[name] {
 				return catalog, fmt.Errorf("tool name collision: %s", name)
 			}
 			names[name] = true
-			operation := Operation{Method: method, Path: path, Backend: backend, JSONSchema2020: document.IsOpenAPI31OrLater()}
+			security := document.Security
+			if definition.Security != nil {
+				security = *definition.Security
+			}
+			operation := Operation{Method: method, Path: path, Backend: backend, JSONSchema2020: document.IsOpenAPI31OrLater(), Protected: protected(security)}
 			reason := ""
-			if !regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,128}$`).MatchString(name) {
+			if !toolName.MatchString(name) {
 				reason = "unsupported tool name"
 			}
 			if backendOverride == "" && (len(item.Servers) > 0 || definition.Servers != nil && len(*definition.Servers) > 0) {
@@ -232,6 +237,15 @@ func BuildCatalog(document *openapi3.T, schemaURL, backendOverride string) (Cata
 	return catalog, nil
 }
 
+var (
+	unsafeNameCharacters = regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	toolName             = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,128}$`)
+)
+
+func protected(security openapi3.SecurityRequirements) bool {
+	return len(security) > 0 && !slices.ContainsFunc(security, func(requirement openapi3.SecurityRequirement) bool { return len(requirement) == 0 })
+}
+
 func objectSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false}
 }
@@ -272,7 +286,14 @@ func inputSchema(schema *openapi3.Schema, draft2020 bool, active map[*openapi3.S
 	if depth > 12 || *nodes > 2048 {
 		return nil, errors.New("input schema complexity limit exceeded")
 	}
-	if len(schema.OneOf)+len(schema.AnyOf)+len(schema.AllOf)+len(schema.PrefixItems)+len(schema.PatternProperties)+len(schema.DependentSchemas)+len(schema.DependentRequired) > 0 || schema.Not != nil || schema.If != nil || schema.Then != nil || schema.Else != nil || schema.Contains != nil || schema.PropertyNames != nil || schema.Discriminator != nil || schema.UnevaluatedItems.Has != nil || schema.UnevaluatedItems.Schema != nil || schema.UnevaluatedProperties.Has != nil || schema.UnevaluatedProperties.Schema != nil || schema.Always != nil || schema.Const != nil {
+	union, unionKey := schema.AnyOf, "anyOf"
+	if len(schema.OneOf) > 0 {
+		union, unionKey = schema.OneOf, "oneOf"
+	}
+	if len(schema.OneOf) > 0 && len(schema.AnyOf) > 0 || len(union) > 0 && (len(schema.Type.Slice()) > 0 || len(schema.Properties) > 0 || schema.Items != nil || schema.AdditionalProperties.Has != nil || schema.AdditionalProperties.Schema != nil || schema.Enum != nil) {
+		return nil, errors.New("unsupported complex MCP input schema")
+	}
+	if len(schema.AllOf)+len(schema.PrefixItems)+len(schema.PatternProperties)+len(schema.DependentSchemas)+len(schema.DependentRequired) > 0 || schema.Not != nil || schema.If != nil || schema.Then != nil || schema.Else != nil || schema.Contains != nil || schema.PropertyNames != nil || schema.Discriminator != nil || schema.UnevaluatedItems.Has != nil || schema.UnevaluatedItems.Schema != nil || schema.UnevaluatedProperties.Has != nil || schema.UnevaluatedProperties.Schema != nil || schema.Always != nil || schema.Const != nil {
 		return nil, errors.New("unsupported complex MCP input schema")
 	}
 	if schema.Format == "binary" || schema.Format == "byte" || schema.ContentEncoding != "" || schema.ContentMediaType != "" || schema.ContentSchema != nil {
@@ -294,11 +315,28 @@ func inputSchema(schema *openapi3.Schema, draft2020 bool, active map[*openapi3.S
 	if kind != "" {
 		result["type"] = kind
 	}
-	if kind != "null" && (schema.Nullable || schema.Type.Includes("null")) {
+	if kind != "" && kind != "null" && (schema.Nullable || schema.Type.Includes("null")) {
 		result["type"] = []string{kind, "null"}
 	}
 	if schema.Description != "" {
 		result["description"] = schema.Description
+	}
+	if len(union) > 0 {
+		branches := []any{}
+		for _, ref := range union {
+			if ref == nil || ref.Value == nil {
+				return nil, errors.New("unsupported complex MCP input schema")
+			}
+			branch, err := inputSchema(ref.Value, draft2020, active, depth+1, nodes)
+			if err != nil {
+				return nil, err
+			}
+			branches = append(branches, branch)
+		}
+		if schema.Nullable {
+			branches = append(branches, map[string]any{"type": "null"})
+		}
+		result[unionKey] = branches
 	}
 	if schema.Format != "" {
 		result["format"] = schema.Format

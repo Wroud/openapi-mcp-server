@@ -14,7 +14,7 @@ func TestSchemaSourceFailurePreventsMetadata(t *testing.T) {
 			w.WriteHeader(503)
 			return
 		}
-		fmt.Fprint(w, `{"openapi":"3.1.0","info":{"title":"API","version":"1"},"paths":{"/items":{"$ref":"/leaf.json#/paths/~1items"}}}`)
+		fmt.Fprint(w, `{"openapi":"3.1.0","info":{"title":"API","version":"1"},"paths":{"/items":{"$ref":"/leaf.json#/paths/~1items"}},"components":{"schemas":{"Item":{"$ref":"/leaf.json#/components/schemas/Item"}}}}`)
 	}))
 	defer source.Close()
 	handler, err := NewHandler(source.URL + "/root.json")

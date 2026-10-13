@@ -68,13 +68,22 @@ to use a different environment file. Stop the development server with Ctrl+C.
 | `BACKEND_URL` | First root server, or schema origin | Explicit HTTP(S) backend base URL override. |
 | `MCP_PATH` | `/mcp` | HTTP path serving MCP. |
 | `HTTP_ADDR` | `127.0.0.1:8080` | Standalone HTTP listen address. |
-| `AUTH_HEADERS` | `Authorization,Cookie,X-Api-Key` | Comma-separated credential headers forwarded to the schema endpoint. Set empty to forward none. |
+| `AUTH_HEADERS` | `Authorization,Cookie,X-Api-Key` | Comma-separated credential headers forwarded to the schema endpoint and the backend. Set empty to forward none. |
+| `ANONYMOUS_SCHEMA` | `false` | `true` loads every schema document without caller credentials; credentials still go to the backend. |
+| `RESOURCE_METADATA_URL` | Unset | OAuth protected-resource metadata URL. Enables sign-in challenges for protected operations; unset means no challenges. |
+| `CHALLENGE_SCOPE` | Unset | Scope named in challenges and in protected tools' `securitySchemes`. |
+| `TOOL_RESULT_CHALLENGE_USER_AGENTS` | Unset | Comma-separated, case-insensitive `User-Agent` substrings of clients that receive challenges as tool results instead of HTTP 401. |
 
 Configuration is operator supplied; tool callers cannot change the schema URL.
 Redirects are rejected. Routing, body framing and connection headers cannot be
 configured as authentication headers.
 
 ## Schema freshness and caller identity
+
+With `Config.AnonymousSchema` (`ANONYMOUS_SCHEMA=true`) every schema load is
+anonymous, so all callers see the same catalog; the paragraph below describes
+the default credentialed loads. Configured credentials are still forwarded to
+generated operations.
 
 MCP initialization and protocol discovery fetch the current schema anonymously,
 even when the initializing client supplies credentials. Tool listing fetches it
@@ -105,8 +114,15 @@ upstream response bodies.
 fetches, resolves and validates the entry and all referenced OpenAPI documents
 using `github.com/getkin/kin-openapi/openapi3`. A loader reuses its HTTP client;
 each load owns its graph, credentials and parser. A unique document is fetched
-once per load. No partial graph is returned after a source outage or validation
-failure, and later loads can recover without reusing stale authenticated data.
+once per load. When a document reached from an entry Path Item `$ref` (directly
+or through that source's own references) fails to fetch, parse or validate, the
+entry Path Items that depend on it are dropped, the failure is logged with
+`metric_name=UnhandledHttpError`, and the rest of the graph is returned. A
+failure of the entry document, or of a source the entry also uses outside its
+Path Items, still fails the load. Non-entry fetches are bounded by
+`SchemaLimits.SourceTimeout` (default half of `Timeout`) so a slow source leaves
+time for the rest. Later loads can recover without reusing stale authenticated
+data.
 
 External references must stay on the configured origin. Documents referenced
 directly by the entry are admitted automatically; additional transitive document
@@ -172,6 +188,30 @@ HTTP failures preserve their status with a bounded error body, redact forwarded
 credentials and set `IsError`. Transport errors return concise proxy messages.
 Responses are not validated against response schemas or streamed.
 
+## Protected operations and sign-in challenges
+
+An operation is protected when its effective `security` (operation level, else
+root level) is non-empty and has no empty `{}` alternative. With
+`Config.ResourceMetadataURL` set:
+
+- Generated tools carry `securitySchemes`, both at the top level and in `_meta`:
+  `[{"type":"noauth"}]` for public tools and `get_api_information`,
+  `[{"type":"oauth2","scopes":[...]}]` for protected ones.
+- Calling a protected tool without `Authorization` never reaches the backend
+  and answers a challenge. A backend HTTP 401 to a protected call that sent
+  `Authorization` answers a challenge with `error="invalid_token"`. Every other
+  status, and any 401 from a public operation, stays an ordinary tool error.
+- The challenge is `Bearer resource_metadata="<url>", scope="<scope>"`. Clients
+  whose `User-Agent` matches `ToolResultChallengeUserAgents` receive an
+  `isError` tool result with `_meta["mcp/www_authenticate"]` (always carrying
+  `error` and `error_description`); others receive HTTP 401 with
+  `WWW-Authenticate` and `Cache-Control: no-store`.
+
+`NewHTTPHandler` buffers single-object `tools/call` and `tools/list` POSTs to
+apply these rewrites; JSON-RPC batches pass through unbuffered and keep ordinary
+tool errors. `initialize` logs the client's `User-Agent` and `clientInfo`,
+never credentials.
+
 ## Embed or extend
 
 The `proxy` package has no AWS runtime dependency. `NewServer` returns the SDK
@@ -211,9 +251,11 @@ configure `OPENAPI_URL`; `MCP_PATH` can match the gateway route. Set `BACKEND_UR
 IAM and publication are managed by the consuming deployment.
 
 Tests use independent fixtures and loopback servers. They cover official SDK
-calls, concurrent credential isolation, anonymous initialization, schema changes,
+calls, concurrent credential isolation, anonymous initialization and schema loads,
+sign-in challenges in both forms, `securitySchemes` listings, schema changes,
 authentication errors, non-HTTP reuse, bounds, redirects and Lambda envelopes. Graph fixtures also verify the seven
 entry operations, deduplicated source fetches, source-local bases, escaped pointers,
-recursion, null/union preservation, admission and failure recovery.
+recursion, null/union preservation, admission, per-source degradation and
+failure recovery.
 CI runs race tests only and produces no binary artifacts. Consumers build their
 own binaries using the targets above.

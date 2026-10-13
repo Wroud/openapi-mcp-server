@@ -19,8 +19,13 @@ import (
 )
 
 func Execute(ctx context.Context, client *http.Client, operation Operation, arguments json.RawMessage, credentials http.Header) *mcp.CallToolResult {
-	failure := func(message string) *mcp.CallToolResult {
-		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: message}}}
+	result, _ := execute(ctx, client, operation, arguments, credentials)
+	return result
+}
+
+func execute(ctx context.Context, client *http.Client, operation Operation, arguments json.RawMessage, credentials http.Header) (*mcp.CallToolResult, int) {
+	failure := func(message string) (*mcp.CallToolResult, int) {
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: message}}}, 0
 	}
 	if len(arguments) > MaxBytes {
 		return failure("Arguments exceed the size limit")
@@ -216,7 +221,7 @@ func Execute(ctx context.Context, client *http.Client, operation Operation, argu
 	if err != nil || len(encoded) > 2*MaxBytes {
 		return failure(fmt.Sprintf("HTTP %d: encoded response exceeds the size limit", response.StatusCode))
 	}
-	return result
+	return result, response.StatusCode
 }
 
 func scalarText(value any) (string, error) {
