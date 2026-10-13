@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -32,6 +33,7 @@ type Config struct {
 	ResourceMetadataURL           string
 	ChallengeScope                string
 	ToolResultChallengeUserAgents []string
+	SchemaCacheTTL                time.Duration
 }
 
 type credentialsKey struct{}
@@ -72,12 +74,19 @@ func NewServer(config Config) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "openapi-mcp-server", Version: "0.4.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "openapi-mcp-server", Version: "0.4.1"}, nil)
 	if config.BackendURL != "" {
 		backend, err := url.Parse(config.BackendURL)
 		if err != nil || !validBackend(backend) {
 			return nil, errors.New("invalid BackendURL")
 		}
+	}
+	if config.SchemaCacheTTL < 0 {
+		return nil, errors.New("SchemaCacheTTL must not be negative")
+	}
+	var cache *schemaCache
+	if config.AnonymousSchema && config.SchemaCacheTTL > 0 {
+		cache = &schemaCache{loader: schemaLoader, ttl: config.SchemaCacheTTL}
 	}
 	fetch := func(ctx context.Context, req mcp.Request, anonymous bool) (*openapi3.T, http.Header, error) {
 		credentials := make(http.Header)
@@ -93,7 +102,13 @@ func NewServer(config Config) (*mcp.Server, error) {
 		if config.AnonymousSchema {
 			schemaCredentials = nil
 		}
-		document, err := schemaLoader.Load(ctx, schemaCredentials)
+		var document *openapi3.T
+		var err error
+		if cache != nil {
+			document, err = cache.load(ctx)
+		} else {
+			document, err = schemaLoader.Load(ctx, schemaCredentials)
+		}
 		if err != nil {
 			slog.ErrorContext(ctx, "API schema unavailable", "metric_name", "UnhandledHttpError", "error", err)
 			return nil, nil, errors.New("API information is temporarily unavailable")
@@ -156,11 +171,11 @@ func NewServer(config Config) (*mcp.Server, error) {
 						if operation.Tool.Name == call.Name {
 							incoming := requestHeaders(ctx, req)
 							if challenges != nil && operation.Protected && len(credentials) == 0 {
-								return challenges.respond(ctx, incoming, false), nil
+								return challenges.respond(ctx, call.Name, incoming, false), nil
 							}
 							result, status := execute(ctx, schemaLoader.client, operation, call.Arguments, credentials)
 							if challenges != nil && operation.Protected && len(credentials) > 0 && status == http.StatusUnauthorized {
-								return challenges.respond(ctx, incoming, true), nil
+								return challenges.respond(ctx, call.Name, incoming, true), nil
 							}
 							return result, nil
 						}
@@ -207,13 +222,22 @@ func logClient(ctx context.Context, req mcp.Request) {
 	slog.InfoContext(ctx, "MCP client initialized", "user_agent", requestHeaders(ctx, req).Get("User-Agent"), "client_name", name, "client_version", version)
 }
 
-func ConfigFromEnv() Config {
+func ConfigFromEnv() (Config, error) {
 	config := Config{
 		SchemaURL:           os.Getenv("OPENAPI_URL"),
 		BackendURL:          os.Getenv("BACKEND_URL"),
 		AnonymousSchema:     os.Getenv("ANONYMOUS_SCHEMA") == "true",
 		ResourceMetadataURL: os.Getenv("RESOURCE_METADATA_URL"),
 		ChallengeScope:      os.Getenv("CHALLENGE_SCOPE"),
+	}
+	for name, target := range map[string]*time.Duration{"SCHEMA_CACHE_TTL": &config.SchemaCacheTTL, "SCHEMA_TIMEOUT": &config.SchemaOptions.Limits.Timeout, "SCHEMA_SOURCE_TIMEOUT": &config.SchemaOptions.Limits.SourceTimeout} {
+		if value := os.Getenv(name); value != "" {
+			parsed, err := time.ParseDuration(value)
+			if err != nil {
+				return config, fmt.Errorf("invalid %s: %w", name, err)
+			}
+			*target = parsed
+		}
 	}
 	if agents := os.Getenv("TOOL_RESULT_CHALLENGE_USER_AGENTS"); agents != "" {
 		config.ToolResultChallengeUserAgents = strings.Split(agents, ",")
@@ -224,7 +248,7 @@ func ConfigFromEnv() Config {
 			config.AuthHeaders = strings.Split(headers, ",")
 		}
 	}
-	return config
+	return config, nil
 }
 
 func validAuthHeader(name string) bool {

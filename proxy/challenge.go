@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -103,19 +104,24 @@ func (c *challenger) schemes(protected bool) mcp.Meta {
 	return c.public
 }
 
-func (c *challenger) respond(ctx context.Context, headers http.Header, rejected bool) *mcp.CallToolResult {
-	description := "Sign in to use this tool"
+func (c *challenger) respond(ctx context.Context, tool string, headers http.Header, rejected bool) *mcp.CallToolResult {
+	description, reason := "Sign in to use this tool", "missing"
 	if rejected {
-		description = "The access token is invalid or expired"
+		description, reason = "The access token is invalid or expired", "rejected"
 	}
 	result := &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: description}}}
 	agent := strings.ToLower(headers.Get("User-Agent"))
+	logChallenge := func(form string) {
+		slog.InfoContext(ctx, "Sign-in challenge", "tool", tool, "reason", reason, "form", form, "user_agent", headers.Get("User-Agent"), "authorization_header", headers.Get("Authorization") != "")
+	}
 	for _, candidate := range c.userAgents {
 		if strings.Contains(agent, candidate) {
+			logChallenge("tool_result")
 			result.Meta = mcp.Meta{"mcp/www_authenticate": []string{c.header(description)}}
 			return result
 		}
 	}
+	logChallenge("http")
 	if holder, ok := ctx.Value(challengeKey{}).(*challengeHolder); ok {
 		if rejected {
 			holder.set(c.header(description))

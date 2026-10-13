@@ -73,6 +73,9 @@ to use a different environment file. Stop the development server with Ctrl+C.
 | `RESOURCE_METADATA_URL` | Unset | OAuth protected-resource metadata URL. Enables sign-in challenges for protected operations; unset means no challenges. |
 | `CHALLENGE_SCOPE` | Unset | Scope named in challenges and in protected tools' `securitySchemes`. |
 | `TOOL_RESULT_CHALLENGE_USER_AGENTS` | Unset | Comma-separated, case-insensitive `User-Agent` substrings of clients that receive challenges as tool results instead of HTTP 401. |
+| `SCHEMA_CACHE_TTL` | Unset | With `ANONYMOUS_SCHEMA=true`, a Go duration (`5m`) for which each instance reuses the last complete schema load. A degraded load is never cached; while a cached copy exists it is served instead. |
+| `SCHEMA_TIMEOUT` | `10s` | Total deadline for one schema load. |
+| `SCHEMA_SOURCE_TIMEOUT` | Half of `SCHEMA_TIMEOUT` | Deadline for each non-entry document. The entry's directly referenced documents are fetched in parallel. |
 
 Configuration is operator supplied; tool callers cannot change the schema URL.
 Redirects are rejected. Routing, body framing and connection headers cannot be

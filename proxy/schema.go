@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -60,6 +61,7 @@ type schemaLoad struct {
 type schemaFetches struct {
 	credentials http.Header
 	results     map[string]*schemaFetch
+	prefetched  map[string]schemaFetch
 	bytes       int64
 	edges       map[string]map[string]bool
 }
@@ -166,23 +168,28 @@ func documentKey(location *url.URL) string {
 }
 
 func (loader *SchemaLoader) Load(ctx context.Context, credentials http.Header) (*openapi3.T, error) {
+	document, _, err := loader.load(ctx, credentials)
+	return document, err
+}
+
+func (loader *SchemaLoader) load(ctx context.Context, credentials http.Header) (*openapi3.T, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, loader.limits.Timeout)
 	defer cancel()
-	fetches := &schemaFetches{credentials: credentials.Clone(), results: make(map[string]*schemaFetch), edges: make(map[string]map[string]bool)}
+	fetches := &schemaFetches{credentials: credentials.Clone(), results: make(map[string]*schemaFetch), prefetched: make(map[string]schemaFetch), edges: make(map[string]map[string]bool)}
 	dropped := make(map[string]bool)
 	for {
 		state := &schemaLoad{loader: loader, ctx: ctx, fetches: fetches, allowed: make(map[string]bool), documents: make(map[string]*schemaDocument), active: make(map[string]bool), heights: make(map[string]int)}
 		entry, err := state.load(dropped)
 		var source *sourceError
 		if err == nil || !errors.As(err, &source) || source.key == documentKey(loader.root) {
-			return entry, err
+			return entry, len(dropped) > 0, err
 		}
 		paths := state.referencing(source.ref, dropped)
 		if len(paths) == 0 {
 			paths = state.dependents(source.key, dropped)
 		}
 		if len(paths) == 0 {
-			return nil, err
+			return nil, false, err
 		}
 		for _, path := range paths {
 			dropped[path] = true
@@ -210,6 +217,7 @@ func (state *schemaLoad) load(dropped map[string]bool) (*openapi3.T, error) {
 	if err := state.admit(root.tree, root.location, 0, false); err != nil {
 		return nil, err
 	}
+	state.prefetch(root)
 	checked := make(map[string]bool)
 	for {
 		keys := make([]string, 0, len(state.documents))
@@ -447,46 +455,99 @@ func (state *schemaLoad) fetch(key string, location *url.URL) ([]byte, error) {
 	if len(fetches.results) >= state.loader.limits.Documents {
 		return nil, errors.New("schema document count limit exceeded")
 	}
-	ctx := state.ctx
-	if key != documentKey(state.loader.root) {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, state.loader.limits.SourceTimeout)
-		defer cancel()
+	downloaded, ok := fetches.prefetched[key]
+	if !ok {
+		downloaded = state.loader.download(state.ctx, key, location, fetches.credentials)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, key, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header = fetches.credentials.Clone()
-	if request.Header == nil {
-		request.Header = make(http.Header)
-	}
-	request.Header.Set("Accept", "application/json")
 	failure := func(err error) ([]byte, error) {
 		err = &sourceError{key: key, path: location.Path, err: err}
 		fetches.results[key] = &schemaFetch{err: err}
 		return nil, err
 	}
-	response, err := state.loader.client.Do(request)
+	if downloaded.err != nil {
+		return failure(downloaded.err)
+	}
+	limit := min(state.loader.limits.TotalBytes-fetches.bytes, state.loader.limits.DocumentBytes)
+	if int64(len(downloaded.data)) > limit {
+		return failure(errors.New("schema document or total byte limit exceeded"))
+	}
+	fetches.results[key] = &schemaFetch{data: downloaded.data}
+	fetches.bytes += int64(len(downloaded.data))
+	return downloaded.data, nil
+}
+
+func (state *schemaLoad) prefetch(root *schemaDocument) {
+	items, _ := root.tree.(map[string]any)["paths"].(map[string]any)
+	rootKey := documentKey(state.loader.root)
+	locations := make(map[string]*url.URL)
+	for _, item := range items {
+		object, _ := item.(map[string]any)
+		raw, ok := object["$ref"].(string)
+		if !ok {
+			continue
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		target := root.location.ResolveReference(parsed)
+		key := documentKey(target)
+		_, fetched := state.fetches.results[key]
+		_, prefetched := state.fetches.prefetched[key]
+		if key == rootKey || fetched || prefetched || !sameOrigin(target, root.location) || state.loader.checkLocation(target) != nil {
+			continue
+		}
+		locations[key] = target
+	}
+	keys := make([]string, 0, len(locations))
+	for key := range locations {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	keys = keys[:min(len(keys), max(0, state.loader.limits.Documents-len(state.fetches.results)))]
+	results := make([]schemaFetch, len(keys))
+	var wait sync.WaitGroup
+	for i, key := range keys {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			results[i] = state.loader.download(state.ctx, key, locations[key], state.fetches.credentials)
+		}()
+	}
+	wait.Wait()
+	for i, key := range keys {
+		state.fetches.prefetched[key] = results[i]
+	}
+}
+
+func (loader *SchemaLoader) download(ctx context.Context, key string, location *url.URL, credentials http.Header) schemaFetch {
+	if key != documentKey(loader.root) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, loader.limits.SourceTimeout)
+		defer cancel()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, key, nil)
 	if err != nil {
-		return failure(err)
+		return schemaFetch{err: err}
+	}
+	request.Header = credentials.Clone()
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := loader.client.Do(request)
+	if err != nil {
+		return schemaFetch{err: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return failure(fmt.Errorf("schema %s returned HTTP %d", location.Path, response.StatusCode))
+		return schemaFetch{err: fmt.Errorf("schema %s returned HTTP %d", location.Path, response.StatusCode)}
 	}
-	remaining := state.loader.limits.TotalBytes - fetches.bytes
-	limit := min(remaining, state.loader.limits.DocumentBytes)
-	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	data, err := io.ReadAll(io.LimitReader(response.Body, loader.limits.DocumentBytes+1))
 	if err != nil {
-		return failure(err)
+		return schemaFetch{err: err}
 	}
-	if int64(len(data)) > limit {
-		return failure(errors.New("schema document or total byte limit exceeded"))
-	}
-	fetches.results[key] = &schemaFetch{data: data}
-	fetches.bytes += int64(len(data))
-	return data, nil
+	return schemaFetch{data: data}
 }
 
 func skipSchemaData(key string, dictionary bool) bool {

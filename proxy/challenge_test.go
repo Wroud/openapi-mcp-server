@@ -400,3 +400,29 @@ func TestChallengesFollowConfiguredCredentialHeaders(t *testing.T) {
 	assertHTTPChallenge(t, post(t, fixture.handler, callBody("getPrivate"), http.Header{"X-Api-Key": {"stale"}}), rejectedHeader)
 	assertHTTPChallenge(t, post(t, fixture.handler, callBody("getPrivate"), http.Header{"Authorization": {"Bearer ignored"}}), missingHeader)
 }
+
+func TestChallengesAreLoggedWithoutCredentials(t *testing.T) {
+	var buffer bytes.Buffer
+	var lock sync.Mutex
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(lockedWriter{&buffer, &lock}, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	fixture := newProtectedFixture(t, challengeConfig())
+	post(t, fixture.handler, callBody("getPrivate"), http.Header{"User-Agent": {"claude-code/2.1"}})
+	fixture.status.Store(401)
+	post(t, fixture.handler, callBody("getPrivate"), http.Header{"Authorization": {"Bearer secret-token"}, "User-Agent": {chatGPTAgent}})
+	lock.Lock()
+	logged := buffer.String()
+	lock.Unlock()
+	for _, expected := range []string{
+		`"msg":"Sign-in challenge","tool":"getPrivate","reason":"missing","form":"http","user_agent":"claude-code/2.1","authorization_header":false`,
+		`"msg":"Sign-in challenge","tool":"getPrivate","reason":"rejected","form":"tool_result","user_agent":"openai-mcp/1.0.0","authorization_header":true`,
+	} {
+		if !strings.Contains(logged, expected) {
+			t.Fatalf("missing %s in %s", expected, logged)
+		}
+	}
+	if strings.Contains(logged, "secret-token") {
+		t.Fatalf("token logged: %s", logged)
+	}
+}

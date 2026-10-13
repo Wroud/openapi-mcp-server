@@ -17,7 +17,12 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	transport := flag.String("transport", "http", "MCP transport: http or stdio")
 	flag.Parse()
-	server, err := proxy.NewServer(proxy.ConfigFromEnv())
+	config, err := proxy.ConfigFromEnv()
+	if err != nil {
+		slog.Error("Invalid configuration", "error", err)
+		os.Exit(1)
+	}
+	server, err := proxy.NewServer(config)
 	if err != nil {
 		slog.Error("Invalid configuration", "error", err)
 		os.Exit(1)
