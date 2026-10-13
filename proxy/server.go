@@ -74,7 +74,9 @@ func NewServer(config Config) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "openapi-mcp-server", Version: "0.4.1"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "openapi-mcp-server", Version: "0.4.2"}, &mcp.ServerOptions{
+		SupportedProtocolVersions: []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"},
+	})
 	if config.BackendURL != "" {
 		backend, err := url.Parse(config.BackendURL)
 		if err != nil || !validBackend(backend) {
