@@ -119,8 +119,9 @@ func NewServer(config Config) (*mcp.Server, error) {
 	}
 	information := &mcp.Tool{
 		Name:        "get_api_information",
+		Title:       "Get API information",
 		Description: "Get the current API title, version and description visible to the caller.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true},
+		Annotations: &mcp.ToolAnnotations{Title: "Get API information", ReadOnlyHint: true, DestructiveHint: hint(false), IdempotentHint: true, OpenWorldHint: hint(false)},
 	}
 	if challenges != nil {
 		information.Meta = challenges.schemes(false)

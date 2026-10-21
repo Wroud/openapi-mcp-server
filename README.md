@@ -191,6 +191,41 @@ HTTP failures preserve their status with a bounded error body, redact forwarded
 credentials and set `IsError`. Transport errors return concise proxy messages.
 Responses are not validated against response schemas or streamed.
 
+## Tool titles and annotations
+
+Each generated tool takes its `title` (on the tool and in `annotations`) from the
+operation `summary`. Its description is the operation `description`, falling
+back to `summary`, then `METHOD path`.
+
+Every tool sets `readOnlyHint`, `destructiveHint`, `idempotentHint` and
+`openWorldHint` explicitly. Defaults:
+
+| Hint | Default |
+|---|---|
+| `readOnlyHint` | `true` for GET and HEAD |
+| `destructiveHint` | `!readOnlyHint`; every non-read operation is treated as destructive |
+| `idempotentHint` | `true` for GET, HEAD, PUT and DELETE |
+| `openWorldHint` | `false`; each tool talks to one configured backend API |
+
+OpenAPI has no field for these hints, so an operation can override any of them in
+an `x-mcp` extension whose `annotations` object uses the MCP tool annotation
+names, the same shape other OpenAPI-to-MCP generators use. Key names are case-sensitive. Keys that are present win, and a `destructiveHint` that is left out follows the
+resulting `readOnlyHint`:
+
+```json
+"post": {
+  "operationId": "searchItems",
+  "summary": "Search items",
+  "x-mcp": {"annotations": {"readOnlyHint": true, "idempotentHint": true}}
+}
+```
+
+The extension must hold only `annotations`, an object containing only those four
+keys with boolean values, and `readOnlyHint: true` cannot be combined with `destructiveHint: true`.
+An operation that breaks these rules is skipped, and `make schema-check` reports
+an `invalid x-mcp` reason. The built-in `get_api_information` tool is
+read-only, idempotent, non-destructive and closed-world.
+
 ## Protected operations and sign-in challenges
 
 An operation is protected when its effective `security` (operation level, else

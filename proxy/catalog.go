@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -216,9 +218,13 @@ func BuildCatalog(document *openapi3.T, schemaURL, backendOverride string) (Cata
 			if description == "" {
 				description = method + " " + path
 			}
-			readOnly := method == http.MethodGet || method == http.MethodHead
-			destructive := !readOnly
-			operation.Tool = &mcp.Tool{Name: name, Description: description, InputSchema: input, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, DestructiveHint: &destructive, IdempotentHint: readOnly || method == http.MethodPut || method == http.MethodDelete}}
+			annotations, annotationsErr := toolAnnotations(method, definition.Extensions["x-mcp"])
+			if annotationsErr != nil {
+				reason = annotationsErr.Error()
+			} else {
+				annotations.Title = definition.Summary
+			}
+			operation.Tool = &mcp.Tool{Name: name, Title: definition.Summary, Description: description, InputSchema: input, Annotations: annotations}
 			encoded, _ := json.Marshal(operation.Tool)
 			if len(encoded) > 64<<10 {
 				reason = "generated tool schema exceeds 64 KiB"
@@ -241,6 +247,37 @@ var (
 	unsafeNameCharacters = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 	toolName             = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,128}$`)
 )
+
+func toolAnnotations(method string, extension any) (*mcp.ToolAnnotations, error) {
+	var readOnly, destructive, idempotent, openWorld *bool
+	if extension != nil {
+		object, isObject := extension.(map[string]any)
+		overrides, hasAnnotations := object["annotations"].(map[string]any)
+		if !isObject || !hasAnnotations || len(object) != 1 {
+			return nil, errors.New("invalid x-mcp: must be an object holding only an annotations object")
+		}
+		fields := map[string]**bool{"readOnlyHint": &readOnly, "destructiveHint": &destructive, "idempotentHint": &idempotent, "openWorldHint": &openWorld}
+		for _, key := range slices.Sorted(maps.Keys(overrides)) {
+			field, known := fields[key]
+			value, isBool := overrides[key].(bool)
+			if !known || !isBool {
+				return nil, fmt.Errorf("invalid x-mcp: annotations.%s must be a known boolean hint", key)
+			}
+			*field = &value
+		}
+	}
+	readOnly = cmp.Or(readOnly, hint(method == http.MethodGet || method == http.MethodHead))
+	destructive = cmp.Or(destructive, hint(!*readOnly))
+	if *readOnly && *destructive {
+		return nil, errors.New("invalid x-mcp: readOnlyHint and destructiveHint cannot both be true")
+	}
+	idempotent = cmp.Or(idempotent, hint(method == http.MethodGet || method == http.MethodHead || method == http.MethodPut || method == http.MethodDelete))
+	return &mcp.ToolAnnotations{ReadOnlyHint: *readOnly, DestructiveHint: destructive, IdempotentHint: *idempotent, OpenWorldHint: cmp.Or(openWorld, hint(false))}, nil
+}
+
+func hint(value bool) *bool {
+	return &value
+}
 
 func protected(security openapi3.SecurityRequirements) bool {
 	return len(security) > 0 && !slices.ContainsFunc(security, func(requirement openapi3.SecurityRequirement) bool { return len(requirement) == 0 })
