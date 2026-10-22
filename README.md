@@ -5,7 +5,8 @@ stdio server, embed it in another Go application, or deploy the optional AWS
 Lambda adapter.
 
 The server exposes `get_api_information` and tools generated from supported
-OpenAPI operations. It deliberately supports a practical subset rather than
+OpenAPI operations; `DISABLE_API_INFORMATION_TOOL=true` withholds the built-in
+tool. It deliberately supports a practical subset rather than
 interpreting every valid OpenAPI feature.
 
 ## Run
@@ -76,6 +77,7 @@ to use a different environment file. Stop the development server with Ctrl+C.
 | `SCHEMA_CACHE_TTL` | Unset | With `ANONYMOUS_SCHEMA=true`, a Go duration (`5m`) for which each instance reuses the last complete schema load. A degraded load is never cached; while a cached copy exists it is served instead. |
 | `SCHEMA_TIMEOUT` | `10s` | Total deadline for one schema load. |
 | `SCHEMA_SOURCE_TIMEOUT` | Half of `SCHEMA_TIMEOUT` | Deadline for each non-entry document. The entry's directly referenced documents are fetched in parallel. |
+| `DISABLE_API_INFORMATION_TOOL` | `false` | `true` neither lists nor serves `get_api_information`; calling it answers like any unknown tool. Listings, including degraded ones, then hold only generated operations and can be empty. The name stays reserved, so an operation using it is still a collision. `make smoke` expects the tool and fails with it disabled. |
 
 Configuration is operator supplied; tool callers cannot change the schema URL.
 Redirects are rejected. Routing, body framing and connection headers cannot be

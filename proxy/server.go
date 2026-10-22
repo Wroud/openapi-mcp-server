@@ -34,6 +34,7 @@ type Config struct {
 	ChallengeScope                string
 	ToolResultChallengeUserAgents []string
 	SchemaCacheTTL                time.Duration
+	DisableAPIInformationTool     bool
 }
 
 type credentialsKey struct{}
@@ -76,6 +77,7 @@ func NewServer(config Config) (*mcp.Server, error) {
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "openapi-mcp-server", Version: "0.4.2"}, &mcp.ServerOptions{
 		SupportedProtocolVersions: []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"},
+		Capabilities:              &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}, Tools: &mcp.ToolCapabilities{ListChanged: true}},
 	})
 	if config.BackendURL != "" {
 		backend, err := url.Parse(config.BackendURL)
@@ -117,22 +119,24 @@ func NewServer(config Config) (*mcp.Server, error) {
 		}
 		return document, credentials, nil
 	}
-	information := &mcp.Tool{
-		Name:        "get_api_information",
-		Title:       "Get API information",
-		Description: "Get the current API title, version and description visible to the caller.",
-		Annotations: &mcp.ToolAnnotations{Title: "Get API information", ReadOnlyHint: true, DestructiveHint: hint(false), IdempotentHint: true, OpenWorldHint: hint(false)},
-	}
-	if challenges != nil {
-		information.Meta = challenges.schemes(false)
-	}
-	mcp.AddTool(server, information, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, APIInfo, error) {
-		document, _, err := fetch(ctx, req, false)
-		if err != nil {
-			return nil, APIInfo{}, err
+	if !config.DisableAPIInformationTool {
+		information := &mcp.Tool{
+			Name:        "get_api_information",
+			Title:       "Get API information",
+			Description: "Get the current API title, version and description visible to the caller.",
+			Annotations: &mcp.ToolAnnotations{Title: "Get API information", ReadOnlyHint: true, DestructiveHint: hint(false), IdempotentHint: true, OpenWorldHint: hint(false)},
 		}
-		return nil, APIInfo{Title: document.Info.Title, Version: document.Info.Version, Description: document.Info.Description}, nil
-	})
+		if challenges != nil {
+			information.Meta = challenges.schemes(false)
+		}
+		mcp.AddTool(server, information, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, APIInfo, error) {
+			document, _, err := fetch(ctx, req, false)
+			if err != nil {
+				return nil, APIInfo{}, err
+			}
+			return nil, APIInfo{Title: document.Info.Title, Version: document.Info.Version, Description: document.Info.Description}, nil
+		})
+	}
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if method == "initialize" {
@@ -150,7 +154,7 @@ func NewServer(config Config) (*mcp.Server, error) {
 				if !ok {
 					return nil, errors.New("invalid tool call parameters")
 				}
-				if call.Name == "get_api_information" {
+				if call.Name == "get_api_information" && !config.DisableAPIInformationTool {
 					return next(ctx, method, req)
 				}
 			}
@@ -227,11 +231,12 @@ func logClient(ctx context.Context, req mcp.Request) {
 
 func ConfigFromEnv() (Config, error) {
 	config := Config{
-		SchemaURL:           os.Getenv("OPENAPI_URL"),
-		BackendURL:          os.Getenv("BACKEND_URL"),
-		AnonymousSchema:     os.Getenv("ANONYMOUS_SCHEMA") == "true",
-		ResourceMetadataURL: os.Getenv("RESOURCE_METADATA_URL"),
-		ChallengeScope:      os.Getenv("CHALLENGE_SCOPE"),
+		SchemaURL:                 os.Getenv("OPENAPI_URL"),
+		BackendURL:                os.Getenv("BACKEND_URL"),
+		AnonymousSchema:           os.Getenv("ANONYMOUS_SCHEMA") == "true",
+		ResourceMetadataURL:       os.Getenv("RESOURCE_METADATA_URL"),
+		ChallengeScope:            os.Getenv("CHALLENGE_SCOPE"),
+		DisableAPIInformationTool: os.Getenv("DISABLE_API_INFORMATION_TOOL") == "true",
 	}
 	for name, target := range map[string]*time.Duration{"SCHEMA_CACHE_TTL": &config.SchemaCacheTTL, "SCHEMA_TIMEOUT": &config.SchemaOptions.Limits.Timeout, "SCHEMA_SOURCE_TIMEOUT": &config.SchemaOptions.Limits.SourceTimeout} {
 		if value := os.Getenv(name); value != "" {
