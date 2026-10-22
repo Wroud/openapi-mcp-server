@@ -228,6 +228,20 @@ An operation that breaks these rules is skipped, and `make schema-check` reports
 an `invalid x-mcp` reason. The built-in `get_api_information` tool is
 read-only, idempotent, non-destructive and closed-world.
 
+The entry document's root can carry server-wide guidance for the model in
+`x-mcp.instructions`, a string the server returns as `instructions` from
+`initialize`. It suits rules that span tools or apply when no tool is called.
+Any other shape, or a missing extension, sends no instructions.
+
+```json
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Example API", "version": "1.0.0"},
+  "x-mcp": {"instructions": "Ask before choosing a region."},
+  "paths": {}
+}
+```
+
 ## Protected operations and sign-in challenges
 
 An operation is protected when its effective `security` (operation level, else

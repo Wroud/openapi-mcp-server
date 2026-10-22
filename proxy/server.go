@@ -143,9 +143,20 @@ func NewServer(config Config) (*mcp.Server, error) {
 				logClient(ctx, req)
 			}
 			if method == "initialize" || method == "server/discover" {
-				if _, _, err := fetch(ctx, req, true); err != nil {
+				document, _, err := fetch(ctx, req, true)
+				if err != nil {
 					return nil, err
 				}
+				result, err := next(ctx, method, req)
+				if err != nil {
+					return nil, err
+				}
+				if initialized, ok := result.(*mcp.InitializeResult); ok {
+					if instructions := apiInstructions(document); instructions != "" {
+						initialized.Instructions = instructions
+					}
+				}
+				return result, nil
 			}
 			var call *mcp.CallToolParamsRaw
 			if method == "tools/call" {
@@ -219,6 +230,12 @@ func NewServer(config Config) (*mcp.Server, error) {
 	})
 
 	return server, nil
+}
+
+func apiInstructions(document *openapi3.T) string {
+	extension, _ := document.Extensions["x-mcp"].(map[string]any)
+	instructions, _ := extension["instructions"].(string)
+	return instructions
 }
 
 func logClient(ctx context.Context, req mcp.Request) {
